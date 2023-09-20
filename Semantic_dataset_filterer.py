@@ -334,6 +334,9 @@ if type(n_iterations) is not int or n_iterations <= 0:
 if not os.path.exists(dataset_path+".jsonl"):
     print(f">Dataset path doesn't exist! It must be a .jsonl file!<")
     exit()
+if device == "cuda" and not torch.cuda.is_available():
+    print(">Device was selected as 'Cuda', but no Cuda devices are available!<\n>Switching 'device' to 'cpu'<")
+    device = "cpu"
 
 # Initialize the hardware and model
 tokenizer = AutoTokenizer.from_pretrained(embed_model)
