@@ -5,6 +5,7 @@ So far, i made:
 ## Semantic dataset filterer
 This script can deduplicate and filter datasets that are millions of conversations long. And condense them down to only a handful of the most unique conversations.
 ### To run this script:
+0. Have Python installed. Open your console and install: `pip install numpy`, `pip install tqdm`, and [PyTorch](https://pytorch.org/)
 1. Download the Semantic_dataset_filterer.py file from this repo.
 2. Open it in any text/code editor.
 3. Navigate to the middle of the script, there you will see all the settings available.
