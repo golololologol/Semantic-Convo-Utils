@@ -29,3 +29,5 @@ What's a script useful for, if the input format if unknown? Well, not for much, 
 ### Notes:
 * Dataset versions are cross-loadable, say you have a dataset in the old format, and set the script's `dataset_version` to 2 (new format), the final conversations will be saved in the new format. Same the other way.
 * Embedding making supports Apple's `mps` device to utilize your Apple GPU for this.
+* If you're feeling extra lazy, in theory, you can make your dataset consist only of conversation turns, without any addidtional fields. Other fields should be added automatically, if you provide atleast the `conversations` lines as lists of turns.\
+  So i think you can get away with a dataset thats nothing but: `{"conversations": ["AAAA","aaaaaaa","AAAAA"]}`
