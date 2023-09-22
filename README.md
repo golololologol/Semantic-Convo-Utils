@@ -3,7 +3,7 @@ A repo for any scripts that i make, that involve manipulating data in conversati
 So far, i made:
 * Semantic_dataset_filterer.py
 ## Semantic dataset filterer
-This script can deduplicate and filter datasets that are millions of conversations long. And condense them down to only a handful of the most unique conversations.
+This script can deduplicate and filter datasets that are millions of conversations long. And condense them down to only a handful of the most unique conversations. Made with heavy focus on speed and optimized operations.
 ### To run this script:
 0. Have Python installed. Open your console and install: `pip install numpy`, `pip install tqdm`, and [PyTorch](https://pytorch.org/)
 1. Download the Semantic_dataset_filterer.py file from this repo.
@@ -34,4 +34,7 @@ What's a script useful for, if the input format if unknown? Well, not for much, 
   So i think you can get away with a dataset thats nothing but: `{"conversations": ["AAAA","aaaaaaa","AAAAA"]}`
 * `dataset_quality`/`score` can also be used with negative numbers. The conversations that have negative score/quality will be less likely to be present in the final filtered dataset, but they still will have an impact on overall uniqueness calculations.\
   So its possibly a good idea to add to your input dataset some other big one, set the big dataset's conversations score to something like -9, and in theory it'll improve the quality of the filtering, as more data will be considered when calculating uniquness of each conversation.
+#### Performance(i9 9900k, RTX 3090):
 * For a 6gb dataset of 4 million conversations, with the default model and dataset chunking of 100000 conversations, this script made embeddings in 24 hours on a single RTX 3090, maximum RAM usage was 26gb. Final embeddings file ended up being 16gb in size.
+* This script works has minimal overheads, from profiling it: When pre-processing text for embeddings, 97.5% of time is spent waiting on the tokenizer. When making embeddings, 98.5% of time is spent waiting on the embedding model. Only path to improving this, as i see is to use ONNX, or even better, TensorRT-converted models, but thats a whole nother level of headache to deal with.
+* 
