@@ -1,14 +1,13 @@
-import numpy as np
-import torch
 from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
-import json
-import os
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
+from tqdm import tqdm
+import numpy as np
+import torch
+import json
+import os
 import gc
 import re
-import math
 
 ### Functions
 def read_jsonl_lazy(file_path):
@@ -111,17 +110,18 @@ def approximate_final_convo_amount(conversations_count):
     estimated_remaining_conversations = conversations_count * (remaining_factor ** n_iterations)
     print(f">Estimate of remaining conversations after {n_iterations} iterations: ~{int(estimated_remaining_conversations)}<")
 
-def tokenize_batch(batch, start_idx, max_length, tokenizer, pattern):  # Input: List of conversations, starting index in the original dataset, maximum token length, tokenizer, and text-cleaning pattern
+def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conversations, starting index in the original dataset, maximum token length, tokenizer, and text-cleaning pattern
     embeddings_to_make_local = []
     for idx, convo in enumerate(batch):
-        # Text Preprocessing: Removing unwanted characters using regex pattern and splitting conversation into chunks of 100 words to stay under the tokenizer's sequence length
+        # Text Preprocessing: Removing unwanted characters using regex pattern and splitting conversation into chunks of words to stay under the tokenizer's max sequence length
         cleaned_convo = pattern.sub('', convo)
+        cleaned_convo = ' '.join(cleaned_convo.split())
         words = cleaned_convo.split(" ")
-        word_chunks = [' '.join(words[i:i+100]) for i in range(0, len(words), 100)]
+        word_chunks = [' '.join(words[i:i + (max_seq_len // 3)]) for i in range(0, len(words), (max_seq_len // 3))] # Split words into chunks of max_seq_len//3 words each
         word_chunks = [word_chunks[0]] + [f" {chunk}" for chunk in word_chunks[1:]]
         
         # Tokenization: Tokenizing the word chunks into tokens
-        tokenized_word_chunks = [tokenizer.encode(chunk, add_special_tokens=False, truncation=True, max_length=max_length) for chunk in word_chunks]
+        tokenized_word_chunks = [tokenizer.encode(chunk, add_special_tokens=False, truncation=True, max_length=max_seq_len) for chunk in word_chunks]
         
         # Aggregating Tokens: Concatenating the tokens from all chunks into a single list for the given conversation
         all_tokens = [token for chunk in tokenized_word_chunks for token in chunk]
@@ -129,7 +129,7 @@ def tokenize_batch(batch, start_idx, max_length, tokenizer, pattern):  # Input: 
     
     return embeddings_to_make_local  # Output: List of dictionaries with tokenized text and original index
 
-def generate_embeddings(conversations, iteration, max_length=512):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. max_length - tokenizer's sequence length
+def generate_embeddings(conversations, iteration):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. max_length - tokenizer's sequence length
     all_embeddings = []
     idx_to_embeddings = {}
     embeddings_to_make = []
@@ -139,7 +139,7 @@ def generate_embeddings(conversations, iteration, max_length=512):  # Input: Lis
         futures = []
         for i in range(0, len(conversations), pre_process_batch_size):
             batch = conversations[i:i + pre_process_batch_size]
-            futures.append(executor.submit(tokenize_batch, batch, i, max_length, tokenizer, pattern))
+            futures.append(executor.submit(tokenize_batch, batch, i, tokenizer, pattern))
         for future in tqdm(futures, desc=f">Pre-processing text", leave=False, postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}"):
             embeddings_to_make.extend(future.result())
 
@@ -153,16 +153,16 @@ def generate_embeddings(conversations, iteration, max_length=512):  # Input: Lis
         for item in batch_to_process:
             tokens = item['tokens']
             original_idx = item['original_idx']
-            tensor_list.append(tokens[:max_length])
-            attention_mask_list.append([1] * min(len(tokens), max_length))
+            tensor_list.append(tokens[:max_seq_len])
+            attention_mask_list.append([1] * min(len(tokens), max_seq_len))
 
             # Handling Overlength Tokens: If the amount of tokens exceed max_length, store them in idx_to_embeddings
-            if len(tokens) > max_length:
+            if len(tokens) > max_seq_len:
                 if original_idx not in idx_to_embeddings:
                     idx_to_embeddings[original_idx] = []
         
         # Tensor Padding: Padding the tensors and attention masks to be of equal length
-        max_len = max(min(len(item), max_length) for item in tensor_list)
+        max_len = max(min(len(item), max_seq_len) for item in tensor_list)
         tensor_list = np.array([np.pad(a, (0, max_len - len(a)), 'constant') for a in tensor_list])
         attention_mask_list = np.array([np.pad(a, (0, max_len - len(a)), 'constant') for a in attention_mask_list])
         
@@ -177,7 +177,7 @@ def generate_embeddings(conversations, iteration, max_length=512):  # Input: Lis
         # Saving Embeddings: Store the generated embeddings
         for j, item in enumerate(batch_to_process):
             original_idx = item['original_idx']
-            if len(item['tokens']) <= max_length:
+            if len(item['tokens']) <= max_seq_len:
                 all_embeddings.append((original_idx, output[j]))
             else:
                 idx_to_embeddings[original_idx].append(output[j])
@@ -275,8 +275,8 @@ def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from
 ### Main Logic
 ## Parameters
 # Path, model, device, and script mode
-file_path = "C:/Users/Some_User/Dataset.jsonl" # Example line of a supported dataset: `{"init": "System message", "conversations": ["AAAA", "aaaaaaa", "AAAAA"], "source": "aaa_dataset", "dataset_quality": 2, "synthetic_origin": false, "likely_factual": false, "tags": ["aaa"]}`."Conversations" follows a turn-based format, with no turn discriminators like "User:"/"Assistant:"/etc..
-embed_model = "thenlper/gte-large"
+file_path = "Path:/To/Your/Dataset.jsonl" # Example line of a supported dataset: `{"init": "Some system message", "conversations": ["AAAA", "aaaaaaa", "AAAAA"], "source": "aaa_dataset", "dataset_quality": 2, "synthetic_origin": false, "likely_factual": false, "tags": ["aaa"]}`."Conversations" follows a turn-based format, with no turn discriminators like "User:"/"Assistant:"/etc..
+embed_model = "thenlper/gte-large" # gte-large is a pretty big model, which makes 1024 dim. embeddings, consider smaller embed models if you value time>quality
 device = "cuda" # "cuda", "cpu", "mps"
 script_mode = 1 # 1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe. 3 - Only filter. 4 - Only embeddings
 
@@ -284,7 +284,7 @@ script_mode = 1 # 1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe
 chunk_size = 100000 # Number of convos per chunk, if the dataset is big (significantly lessens the amount of Ram used when making embeddings)
 num_threads = 8 # Threads to use for any multithreaded workloads
 pre_process_batch_size = 8 # Batch size for pre-processing text for embeddings
-embeddings_batch_size = 200 # Batch size when making embeddings (will use a lot more Vram/Ram)
+embeddings_batch_size = 100 # Batch size when making embeddings (will use a lot more Vram/Ram)
 uniqueness_batch_size = 1024 # Batch size when calculating uniqueness of conversations
 
 # Configuration
@@ -295,7 +295,7 @@ print_final_stats = True # Output the metrics of the final dataset?
 early_approximation = True # Approximate the final number of convos, even before deduping?
 
 # Deduping configuration
-P = 10 # Save 1/P conversations in a group of near-duplicates
+P = 10 # Save 1/P most unique conversations in a group of near-duplicates (set P to 0, to save only 1 most unique conversation out of every group)
 match_threshold = 10 # Conversations that share match_threshold or more beginning words will be considered near-duplicates, and will be subject to deduplication
 
 # Filtering configuration
@@ -310,17 +310,6 @@ preserve_original_order = True # Save conversations in the order that they origi
 
 
 ## Logic execution
-# Misc variables
-use_deduped_successful = False
-final_convo_amount_showed = False
-conversations = []
-dataset_name = os.path.splitext(os.path.basename(file_path))[0]
-dataset_directory = os.path.dirname(file_path)
-dataset_path = f"{dataset_directory}\{dataset_name}"
-embeddings_path = f"{dataset_path}_embeddings.npy"
-deduped_file = f"{dataset_path}_Deduped.jsonl"
-deduped_embeds_path = f"{dataset_path}_Deduped_embeddings.npy"
-
 # Bad settings handling
 if script_mode not in [1, 2, 3, 4]:
     print(f">Invalid script mode!<\n>1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe. 3 - Only filter. 4 - Only embeddings<\n>Error was here: script_mode = {script_mode}<")
@@ -331,12 +320,24 @@ if dataset_version not in [1, 2]:
 if type(n_iterations) is not int or n_iterations <= 0:
     print(f">Invalid number of iterations!<\n>Error was here: n_iterations = {n_iterations}<")
     exit()
-if not os.path.exists(dataset_path+".jsonl"):
-    print(f">Dataset path doesn't exist! It must be a .jsonl file!<")
+if not os.path.exists(file_path) or not os.path.splitext(file_path)[1] == ".jsonl":
+    print(f">Specified dataset doesn't exist or isn't the right file type! It must be a .jsonl file!<")
     exit()
 if device == "cuda" and not torch.cuda.is_available():
     print(">Device was selected as 'Cuda', but no Cuda devices are available!<\n>Switching 'device' to 'cpu'<")
     device = "cpu"
+
+# Misc variables
+max_seq_len = 512 # Sequence length of the model and tokenizer, change it accordingly, if you're using some other embedding model
+use_deduped_successful = False
+final_convo_amount_showed = False
+conversations = []
+dataset_name = os.path.splitext(os.path.basename(file_path))[0]
+dataset_directory = os.path.dirname(file_path)
+dataset_path = f"{dataset_directory}\{dataset_name}"
+embeddings_path = f"{dataset_path}_embeddings.npy"
+deduped_file = f"{dataset_path}_Deduped.jsonl"
+deduped_embeds_path = f"{dataset_path}_Deduped_embeddings.npy"
 
 # Initialize the hardware and model
 tokenizer = AutoTokenizer.from_pretrained(embed_model)
@@ -362,7 +363,7 @@ else:
         final_convo_amount_showed = True
 
     embeddings = []
-    pattern = re.compile(r'\bis\b|\bthe\b|\band\b|\bthat\b|\bto\b')
+    pattern = re.compile(r'\b(?:is|to|that|the|and|in|by|at|for|a|an)\b', re.IGNORECASE)# Remove function words, as they contain almost no lexical meaning, and thus provide almost no semantic value to the conversation
     
     for i, chunk in enumerate(chunks_to_embed):
         embeddings.extend(generate_embeddings(chunk, i))
@@ -399,8 +400,10 @@ if script_mode in [1, 2]:
 
             group_embeddings = [embeddings[item['index']] for item in group]
             group_uniqueness_values = compute_uniqueness(np.array(group_embeddings))
-            
-            n_indices_to_select = math.ceil(len(group_uniqueness_values) / P)
+            if P == 0:
+                n_indices_to_select = 1
+            else:
+                n_indices_to_select = len(group_uniqueness_values) // P
             sorted_unique_indices = np.argsort(group_uniqueness_values)
             most_unique_index = sorted_unique_indices[:n_indices_to_select]
             
