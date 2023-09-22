@@ -32,3 +32,5 @@ What's a script useful for, if the input format if unknown? Well, not for much, 
 * Embedding making supports Apple's `mps` device to utilize your Apple GPU for this.
 * If you're feeling extra lazy, in theory, you can make your dataset consist only of conversation turns, without any addidtional fields. Other fields should be added automatically, if you provide atleast the `conversations` lines as lists of turns.\
   So i think you can get away with a dataset thats nothing but: `{"conversations": ["AAAA","aaaaaaa","AAAAA"]}`
+* `dataset_quality`/`score` can also be used with negative numbers. The conversations that have negative score/quality will be less likely to be present in the final filtered dataset, but thes still will have an impact on overall uniqueness.\
+  So its possibly a good idea to fill your input dataset with some other big ones, set the big dataset's score to something like -9, and in theory it'll improve the quality of the filtering, as more data will be considered when calculating uniquness of each conversation.
