@@ -10,7 +10,7 @@ import gc
 import re
 
 ### Functions
-def read_jsonl_lazy(file_path): # Generator to read the dataset line-by-line
+def read_jsonl_lazy(file_path): # Generator to lazy read the dataset line-by-line
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             yield json.loads(line)
@@ -73,7 +73,7 @@ def dataset_finalizer(conversations):
         
     return conversations_to_save # Output: The final dataset in the desired format
 
-def dataset_dumper(conversations):
+def dataset_dumper(conversations): # Dumps the dataset to a corresponding file
     if script_mode == 1:
         file = dataset_path + "_Deduped_and_Filtered.jsonl"
     elif script_mode == 2:
@@ -111,6 +111,39 @@ def approximate_final_convo_amount(conversations_count):
     estimated_remaining_conversations = conversations_count * (remaining_factor ** n_iterations)
     print(f">Estimate of remaining conversations after {n_iterations} iterations: ~{int(estimated_remaining_conversations)}<")
 
+def is_positive_int(value):
+    return isinstance(value, int) and value > 0
+
+def is_valid_float(value, min_val=0, max_val=1):
+    return (isinstance(value, float) or isinstance(value, int)) and min_val <= value <= max_val
+
+# Bad settings handling for every setting
+def validate_settings():
+    validation_errors = [
+        (script_mode not in valid_script_modes, f">Invalid script mode!<\nError was here: script_mode = {script_mode}"),
+        (dataset_version not in valid_dataset_versions, f">Invalid dataset version!<\nError was here: dataset_version = {dataset_version}"),
+        (not is_positive_int(n_iterations), f">Invalid number of iterations!<\nError was here: n_iterations = {n_iterations}"),
+        (not os.path.exists(file_path), f">Dataset doesn't exist in the specified path!<"),
+        (os.path.splitext(file_path)[1] != ".jsonl", f">Dataset isn't the right file type! It must be a .jsonl file!<"),
+        (not is_positive_int(chunk_size), f">Invalid chunk size!<\nError was here: chunk_size = {chunk_size}"),
+        (not is_positive_int(num_threads), f">Invalid number of threads!<\nError was here: num_threads = {num_threads}"),
+        (not is_positive_int(pre_process_batch_size), f">Invalid pre-process batch size!<\nError was here: pre_process_batch_size = {pre_process_batch_size}"),
+        (not is_positive_int(embeddings_batch_size), f">Invalid embeddings batch size!<\nError was here: embeddings_batch_size = {embeddings_batch_size}"),
+        (not is_positive_int(uniqueness_batch_size), f">Invalid uniqueness batch size!<\nError was here: uniqueness_batch_size = {uniqueness_batch_size}"),
+        (not isinstance(P, int) or not (P >= 0), f">Invalid value for P!<\nError was here: P = {P}"),
+        (not is_positive_int(match_threshold), f">Invalid match threshold!<\nError was here: match_threshold = {match_threshold}"),
+        (not (X is int or float) or not (X >= 0), f">Invalid value for X!<\nError was here: X = {X}"),
+        (not (Y is int or float) or not (Y >= 0), f">Invalid value for Y!<\nError was here: Y = {Y}"),
+        (not is_valid_float(alpha), f">Invalid alpha value!<\nError was here: alpha = {alpha}"),
+        (not is_valid_float(beta), f">Invalid beta value!<\nError was here: beta = {beta}"),
+        (not (quality_factor is int or float), f">Invalid quality factor!<\nError was here: quality_factor = {quality_factor}")
+    ]
+
+    for condition, error_message in validation_errors:
+        if condition:
+            print(error_message)
+            exit()
+
 def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conversations, starting index in the original dataset, maximum token length, tokenizer, and text-cleaning pattern
     embeddings_to_make_local = []
     for idx, convo in enumerate(batch):
@@ -128,7 +161,7 @@ def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conv
         all_tokens = [token for chunk in tokenized_word_chunks for token in chunk]
         embeddings_to_make_local.append({'tokens': all_tokens, 'original_idx': start_idx+idx})
     
-    return embeddings_to_make_local  # Output: List of dictionaries with tokenized text and original index
+    return embeddings_to_make_local  # Output: List of dictionaries with tokenized text and original index of the conversation
 
 def generate_embeddings(conversations, iteration):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. Max_length: tokenizer and model's sequence length
     all_embeddings = []
@@ -195,7 +228,7 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
     
     return final_embeddings  # Output: NumPy array of any-dimensional embeddings of conversations, in the order of their original conversations
 
-def compute_batch_similarity(start, end, data_quality_all, normalized_embeddings, leave_one_out_aggregate_all, weights):
+def compute_batch_similarity(start, end, data_quality_all, normalized_embeddings, leave_one_out_aggregate_all, weights): # Child-function for multi-threaded processing of the compute_uniqueness function
     batch_similarities = np.zeros(end - start)
     leave_one_out_aggregate_all = leave_one_out_aggregate_all[start:end]
     data_quality_all = data_quality_all[start:end]
@@ -246,6 +279,7 @@ def compute_uniqueness(embeddings): # Input: NumPy array of any-dimensional embe
             similarities[start:end] = future.result()
 
     uniqueness_values = 1 - similarities
+
     return uniqueness_values # Output: Array of floats from 0 to 1. 1 being most unique, 0 - least. Corresponding in index position to their respective embedding/conversation
 
 def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from 0 to 1. 1 being most unique, 0 - least. Corresponding in position to their respective embedding/conversation
@@ -279,9 +313,9 @@ def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from
 ### Main Logic
 ## Parameters
 # Path, model, device, and script mode
-file_path = "Path:/To/Your/Dataset.jsonl" # Example line of a supported dataset: `{"init": "Some system message", "conversations": ["AAAA", "aaaaaaa", "AAAAA"], "source": "aaa_dataset", "dataset_quality": 2, "synthetic_origin": false, "likely_factual": false, "tags": ["aaa"]}`."Conversations" follows a turn-based format, with no turn discriminators like "User:"/"Assistant:"/etc..
-embed_model = "thenlper/gte-large" # gte-large is a pretty big model, which makes 1024-dimensional embeddings, consider smaller embedding models if you don't have access to fast hardware, check this to find a model that suits you best: https://huggingface.co/spaces/mteb/leaderboard
-device = "cuda" # "cuda", "cpu", "mps"
+file_path = r"Path:/To/Your/Dataset.jsonl" # Example line of a supported dataset: `{"init": "Some system message", "conversations": ["AAAA", "aaaaaaa", "AAAAA"], "source": "aaa_dataset", "dataset_quality": 2, "synthetic_origin": false, "likely_factual": false, "tags": ["aaa"]}`."Conversations" follows a turn-based format, with no turn discriminators like "User:"/"Assistant:"/etc..
+embed_model = "thenlper/gte-large" # gte-large is a pretty big model, which makes 1024-dimensional embeddings, consider smaller embedding models if you don't have access to fast hardware, check this link to find a model that suits you best: https://huggingface.co/spaces/mteb/leaderboard
+device = "cuda" # "cuda", "cpu", or "mps" for Apple M1/M2 GPUs
 script_mode = 1 # 1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe. 3 - Only filter. 4 - Only embeddings
 
 # Performance parameters
@@ -294,7 +328,7 @@ uniqueness_batch_size = 1024 # Batch size when calculating uniqueness of convers
 # Configuration
 dataset_version = 2 # Save in what format? 1 - Old style datasets. 2 - New style datasets (with sys prompt, and tags)
 save_deduped = True # Save the deduped dataset and its embeddings?
-use_deduped = True # Use the already deduped dataset and embeddings instead of the original to save time?
+use_deduped = True # Use the already deduped dataset and embeddings instead of making them from scratch to save time?
 early_approximation = True # Approximate the final number of convos, even before deduping?
 print_final_stats = True # Output the metrics of the final dataset?
 
@@ -303,8 +337,8 @@ P = 0 # Save 1/P most unique conversations in a group of near-duplicates (set P 
 match_threshold = 10 # Conversations that share match_threshold or more beginning words will be considered near-duplicates, and will be subject to deduplication
 
 # Filtering configuration
-n_iterations = 40 # Number of filtering iterations
-X = 2 # Will delete the bottom X% least unique conversations each iteration
+n_iterations = 135 # Number of filtering iterations
+X = 3.5 # Will delete the bottom X% least unique conversations each iteration
 Y = 0 # Will delete the top Y% most unique conversations each iteration
 alpha = 0.5 # Weight between basic and weighted similarities, 0.9 = (0.9 basic + 0.1 weighted) = cosine similarity
 beta = 0.4 # Weight between cosine similarity and euclidian distance, 0.8 = 0.8 cosine + 0.2 euclidean
@@ -314,19 +348,10 @@ preserve_original_order = True # Save conversations in the order that they origi
 
 
 ## Logic execution
-# Bad settings handling
-if script_mode not in [1, 2, 3, 4]:
-    print(f">Invalid script mode!<\n>1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe. 3 - Only filter. 4 - Only embeddings<\n>Error was here: script_mode = {script_mode}<")
-    exit()
-if dataset_version not in [1, 2]:
-    print(f">Invalid dataset version!<\n>1 - Old style datasets. 2 - New style datasets(with sys prompt, and tags)<\n>Error was here: dataset_version = {dataset_version}<")
-    exit()
-if type(n_iterations) is not int or n_iterations <= 0:
-    print(f">Invalid number of iterations!<\n>Error was here: n_iterations = {n_iterations}<")
-    exit()
-if not os.path.exists(file_path) or not os.path.splitext(file_path)[1] == ".jsonl":
-    print(f">Specified dataset doesn't exist or isn't the right file type! It must be a .jsonl file!<")
-    exit()
+# Bad settings check
+valid_script_modes = [1, 2, 3, 4]
+valid_dataset_versions = [1, 2]
+validate_settings()
 if device == "cuda" and not torch.cuda.is_available():
     print(">Device was selected as 'Cuda', but no Cuda devices are available!<\n>Switching 'device' to 'cpu'<")
     device = "cpu"
@@ -377,6 +402,7 @@ else:
 
     print(f">Total embeddings generated: {len(embeddings)}<\n>Saving embeddings to {dataset_name}_embeddings.npy...<")
     np.save(embeddings_path, np.array(embeddings))
+    gc.collect()
 
 # Commencing the dedupment
 if script_mode in [1, 2]:
@@ -443,8 +469,7 @@ if script_mode in [1, 3]:
     elif not conversations:
         conversations = list(json_conversations_to_list(file_path))
 
-    conversations_count = len(conversations)
-    approximate_final_convo_amount(conversations_count)
+    approximate_final_convo_amount(len(conversations))
     uniqueness_values = compute_uniqueness(np.array(embeddings))
 
     for i in tqdm(range(n_iterations), desc=">Filtering Iterations", smoothing = progress_bars_smoothing):
@@ -453,8 +478,8 @@ if script_mode in [1, 3]:
         embeddings = [embeddings[i] for i in indexes_to_save]
         uniqueness_values = compute_uniqueness(np.array(embeddings))
 
-    gc.collect()
     print(">Filtering done<")
+    gc.collect()
 
 # Save the final conversations (if there are any that need to be saved)
 if script_mode in [1, 2, 3]:
