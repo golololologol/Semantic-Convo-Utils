@@ -10,15 +10,15 @@ import gc
 import re
 
 ### Functions
-def read_jsonl_lazy(file_path):
+def read_jsonl_lazy(file_path): # Generator to read the dataset line-by-line
     with open(file_path, 'r', encoding='utf-8') as f:
         for line in f:
             yield json.loads(line)
 
-def json_conversations_to_list(file_path): # Dataset version 1: populates the "conversations" variable with ["text"(conversations), "reversed", "source", "score"]
-    if dataset_version == 1:
+def json_conversations_to_list(file_path): # Datasets in different versions are cross-loadable and will be saved in the chosen format
+    if dataset_version == 1: # Dataset version 1: populates the "conversations" variable with ["text"(conversations), "reversed", "source", "score"] for each line in the dataset
         for item in read_jsonl_lazy(file_path):
-            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"]))
+            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"])) # Each turn is discerned with "\n|`|\n"
             tags = item.get("tags", [])
             score = item.get("dataset_quality")
             if not score:
@@ -33,9 +33,9 @@ def json_conversations_to_list(file_path): # Dataset version 1: populates the "c
                 "source": item.get("source", dataset_name),
                 "score": int(score)
             }
-    else:
-        for item in read_jsonl_lazy(file_path):# Dataset version 2: populates the "conversations" variable with ["sys"(system prompt/context), "text"(conversations), "source", "score", "synthetic", "factual", "tags"]
-            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"]))
+    else: # Dataset version 2: populates the "conversations" variable with ["sys"(system prompt/context), "text"(conversations), "source", "score", "synthetic", "factual", "tags"] for each line in the dataset
+        for item in read_jsonl_lazy(file_path):
+            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"])) # Each turn is discerned with "\n|`|\n"
             tags = item.get("tags", [])
             quality = item.get("score")
             if not quality:
@@ -70,6 +70,7 @@ def dataset_finalizer(conversations):
                 "likely_factual": conv["factual"],
                 "tags": conv["tags"]
             } for conv in conversations ]
+        
     return conversations_to_save # Output: The final dataset in the desired format
 
 def dataset_dumper(conversations):
@@ -89,12 +90,12 @@ def json_conversations_to_list_to_embed(file_path):
         text = "\n".join(item["conversations"])
         yield text # Output: All conversations as singular strings
 
-def calculate_metrics(conversations):
+def calculate_metrics(conversations): # Input: List of conversations
     total_tokens = 0
     total_words = 0
     total_convos = 0
     
-    for conversation in tqdm(conversations, desc=f">Calculating conversation", leave=False):
+    for conversation in tqdm(conversations, desc=f">Calculating conversation", leave=False, smoothing = progress_bars_smoothing):
         text = " ".join(conversation["conversations"])
         tokens = tokenizer(text)['input_ids']
         words = text.split()
@@ -103,7 +104,7 @@ def calculate_metrics(conversations):
         total_words += len(words)
         total_convos += 1
     
-    return total_tokens, total_words, total_convos
+    return total_tokens, total_words, total_convos # Output: Metrics of the given conversations
 
 def approximate_final_convo_amount(conversations_count):
     remaining_factor = 1 - (X / 100) - (Y / 100) + (X * Y / 10000)
@@ -129,7 +130,7 @@ def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conv
     
     return embeddings_to_make_local  # Output: List of dictionaries with tokenized text and original index
 
-def generate_embeddings(conversations, iteration):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. max_length - tokenizer's sequence length
+def generate_embeddings(conversations, iteration):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. Max_length: tokenizer and model's sequence length
     all_embeddings = []
     idx_to_embeddings = {}
     embeddings_to_make = []
@@ -140,11 +141,11 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
         for i in range(0, len(conversations), pre_process_batch_size):
             batch = conversations[i:i + pre_process_batch_size]
             futures.append(executor.submit(tokenize_batch, batch, i, tokenizer, pattern))
-        for future in tqdm(futures, desc=f">Pre-processing text", leave=False, postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}"):
+        for future in tqdm(futures, desc=f">Pre-processing text", leave=False, postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}", smoothing = progress_bars_smoothing):
             embeddings_to_make.extend(future.result())
 
     # Embedding Generation: Looping through tokenized batches to generate embeddings
-    for i in tqdm(range(0, len(embeddings_to_make), embeddings_batch_size), desc=f">Generating embeddings", postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}"):
+    for i in tqdm(range(0, len(embeddings_to_make), embeddings_batch_size), desc=f">Generating embeddings", postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}", smoothing = progress_bars_smoothing):
         batch_to_process = embeddings_to_make[i:i + embeddings_batch_size]
         tensor_list = []
         attention_mask_list = []
@@ -161,7 +162,7 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
                 if original_idx not in idx_to_embeddings:
                     idx_to_embeddings[original_idx] = []
         
-        # Tensor Padding: Padding the tensors and attention masks to be of equal length
+        # Tensor Padding: Padding the tensors and attention masks to be of equal length for batched operation
         max_len = max(min(len(item), max_seq_len) for item in tensor_list)
         tensor_list = np.array([np.pad(a, (0, max_len - len(a)), 'constant') for a in tensor_list])
         attention_mask_list = np.array([np.pad(a, (0, max_len - len(a)), 'constant') for a in attention_mask_list])
@@ -192,7 +193,7 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
     final_embeddings = np.array([emb[1] for emb in all_embeddings])
     gc.collect()
     
-    return final_embeddings  # Output: NumPy array of any-dimensional embeddings, in the order of their original conversations
+    return final_embeddings  # Output: NumPy array of any-dimensional embeddings of conversations, in the order of their original conversations
 
 def compute_batch_similarity(start, end, data_quality_all, normalized_embeddings, leave_one_out_aggregate_all, weights):
     batch_similarities = np.zeros(end - start)
@@ -212,6 +213,7 @@ def compute_batch_similarity(start, end, data_quality_all, normalized_embeddings
 
         combined_similarity = (beta * cosine_similarity + (1 - beta) * (1 / (1 + euclidean_dist)))/(1 + ((data_quality - 1) * quality_factor)/100)
         batch_similarities[i] = combined_similarity
+
     return batch_similarities # Output: Array of floats from 0 to 1. 0 being most unique, 1 - least.
 
 def compute_uniqueness(embeddings): # Input: NumPy array of any-dimensional embeddings, in the order of their original conversations
@@ -244,7 +246,7 @@ def compute_uniqueness(embeddings): # Input: NumPy array of any-dimensional embe
             similarities[start:end] = future.result()
 
     uniqueness_values = 1 - similarities
-    return uniqueness_values # Output: Array of floats from 0 to 1. 1 being most unique, 0 - least. Corresponding in position to their respective embedding/conversation
+    return uniqueness_values # Output: Array of floats from 0 to 1. 1 being most unique, 0 - least. Corresponding in index position to their respective embedding/conversation
 
 def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from 0 to 1. 1 being most unique, 0 - least. Corresponding in position to their respective embedding/conversation
     sorted_indices = np.argsort(uniqueness_values)
@@ -263,12 +265,14 @@ def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from
         top_Y_percent = 1
     if top_Y_percent > 0:
         sorted_indices = list(reversed(sorted_indices))
-        selected_indices = sorted_indices[top_Y_percent:]
+        selected_indices = sorted_indices[top_Y_percent:] # For whatever reason, double reversing is ~5x faster to do than just slicing the list in reverse
         selected_indices = list(reversed(selected_indices))
     else: selected_indices = sorted_indices
+
     if preserve_original_order:
         selected_indices.sort()
-    return selected_indices # Output: List of indexes as integers
+
+    return selected_indices # Output: List of indexes of conversations to save, represented as integers
 
 
 
@@ -276,34 +280,34 @@ def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from
 ## Parameters
 # Path, model, device, and script mode
 file_path = "Path:/To/Your/Dataset.jsonl" # Example line of a supported dataset: `{"init": "Some system message", "conversations": ["AAAA", "aaaaaaa", "AAAAA"], "source": "aaa_dataset", "dataset_quality": 2, "synthetic_origin": false, "likely_factual": false, "tags": ["aaa"]}`."Conversations" follows a turn-based format, with no turn discriminators like "User:"/"Assistant:"/etc..
-embed_model = "thenlper/gte-large" # gte-large is a pretty big model, which makes 1024 dim. embeddings, consider smaller embed models if you value time>quality
+embed_model = "thenlper/gte-large" # gte-large is a pretty big model, which makes 1024-dimensional embeddings, consider smaller embedding models if you don't have access to fast hardware, check this to find a model that suits you best: https://huggingface.co/spaces/mteb/leaderboard
 device = "cuda" # "cuda", "cpu", "mps"
 script_mode = 1 # 1 - Dedupe and iteratievely filter out convos. 2 - Only dedupe. 3 - Only filter. 4 - Only embeddings
 
 # Performance parameters
 chunk_size = 100000 # Number of convos per chunk, if the dataset is big (significantly lessens the amount of Ram used when making embeddings)
-num_threads = 8 # Threads to use for any multithreaded workloads
-pre_process_batch_size = 8 # Batch size for pre-processing text for embeddings
-embeddings_batch_size = 100 # Batch size when making embeddings (will use a lot more Vram/Ram)
-uniqueness_batch_size = 1024 # Batch size when calculating uniqueness of conversations
+num_threads = 4 # Threads to use for any multithreaded workloads
+pre_process_batch_size = 8 # Batch size for pre-processing text for embeddings (8-16 is good for most cases)
+embeddings_batch_size = 100 # Batch size when making embeddings (will use a lot more Vram/Ram, 512 uses ~22gb of Vram with the default model)
+uniqueness_batch_size = 1024 # Batch size when calculating uniqueness of conversations (128-2048 is good for most cases)
 
 # Configuration
-dataset_version = 2 # 1 - Old style datasets. 2 - New style datasets (with sys prompt, and tags)
+dataset_version = 2 # Save in what format? 1 - Old style datasets. 2 - New style datasets (with sys prompt, and tags)
 save_deduped = True # Save the deduped dataset and its embeddings?
-use_deduped = False # Use the already deduped dataset and embeddings instead of the original to save time?
-print_final_stats = True # Output the metrics of the final dataset?
+use_deduped = True # Use the already deduped dataset and embeddings instead of the original to save time?
 early_approximation = True # Approximate the final number of convos, even before deduping?
+print_final_stats = True # Output the metrics of the final dataset?
 
 # Deduping configuration
-P = 10 # Save 1/P most unique conversations in a group of near-duplicates (set P to 0, to save only 1 most unique conversation out of every group)
+P = 0 # Save 1/P most unique conversations in a group of near-duplicates (set P to 0, to save only 1 most unique conversation out of every group)
 match_threshold = 10 # Conversations that share match_threshold or more beginning words will be considered near-duplicates, and will be subject to deduplication
 
 # Filtering configuration
-n_iterations = 10 # Number of filtering iterations
-X = 2.5 # Will delete the bottom X% least unique conversations each iteration
+n_iterations = 40 # Number of filtering iterations
+X = 2 # Will delete the bottom X% least unique conversations each iteration
 Y = 0 # Will delete the top Y% most unique conversations each iteration
 alpha = 0.5 # Weight between basic and weighted similarities, 0.9 = (0.9 basic + 0.1 weighted) = cosine similarity
-beta = 0.4 # Weight between cosine similarity and euclideian distance, 0.8 = 0.8 cosine + 0.2 euclidean
+beta = 0.4 # Weight between cosine similarity and euclidian distance, 0.8 = 0.8 cosine + 0.2 euclidean
 quality_factor = 1 # How much "dataset_quality" or "score" biases higher ranked convos to be considered more unique (0 = no impact, 2 = double the impact)
 preserve_original_order = True # Save conversations in the order that they originally were? False - sort by uniqueness, bottom - most unique, top - least
 
@@ -329,6 +333,7 @@ if device == "cuda" and not torch.cuda.is_available():
 
 # Misc variables
 max_seq_len = 512 # Sequence length of the model and tokenizer, change it accordingly, if you're using some other embedding model
+progress_bars_smoothing = 0.06
 use_deduped_successful = False
 final_convo_amount_showed = False
 conversations = []
@@ -344,7 +349,7 @@ tokenizer = AutoTokenizer.from_pretrained(embed_model)
 model = AutoModel.from_pretrained(embed_model)
 model.to(device)
 
-# Makin embeds
+# Making embeds
 if os.path.exists(deduped_embeds_path) and os.path.exists(deduped_file) and use_deduped:
     print(">Deduped embeddings file found. Loading...<")
     embeddings = np.load(deduped_embeds_path)
@@ -363,7 +368,7 @@ else:
         final_convo_amount_showed = True
 
     embeddings = []
-    pattern = re.compile(r'\b(?:is|to|that|the|and|in|by|at|for|a|an)\b', re.IGNORECASE)# Remove function words, as they contain almost no lexical meaning, and thus provide almost no semantic value to the conversation
+    pattern = re.compile(r'\b(?:is|to|that|the|and|in|by|at|for|a|an)\b', re.IGNORECASE) # Remove function words, as they contain almost no lexical meaning, and thus provide almost no semantic value to the conversation
     
     for i, chunk in enumerate(chunks_to_embed):
         embeddings.extend(generate_embeddings(chunk, i))
@@ -393,7 +398,7 @@ if script_mode in [1, 2]:
             conversation_groups[start_words].append({'index': idx})
 
         conversations_to_save = []
-        for start_words, group in tqdm(conversation_groups.items(), desc=f">Processing conversations", leave=False):
+        for start_words, group in tqdm(conversation_groups.items(), desc=f">Processing conversations", leave=False, smoothing = progress_bars_smoothing):
             if len(group) == 1:
                 conversations_to_save.append(group[0]['index'])
                 continue
@@ -442,7 +447,7 @@ if script_mode in [1, 3]:
     approximate_final_convo_amount(conversations_count)
     uniqueness_values = compute_uniqueness(np.array(embeddings))
 
-    for i in tqdm(range(n_iterations), desc=">Filtering Iterations"):
+    for i in tqdm(range(n_iterations), desc=">Filtering Iterations", smoothing = progress_bars_smoothing):
         indexes_to_save = filter_conversations(uniqueness_values, X, Y)
         conversations = [conversations[i] for i in indexes_to_save]
         embeddings = [embeddings[i] for i in indexes_to_save]
@@ -451,7 +456,7 @@ if script_mode in [1, 3]:
     gc.collect()
     print(">Filtering done<")
 
-# Save the filtered conversations
+# Save the final conversations (if there are any that need to be saved)
 if script_mode in [1, 2, 3]:
     final_conversations = dataset_finalizer(conversations) # Converts conversations into the desired final format
 
@@ -477,7 +482,7 @@ if print_final_stats and not script_mode == 4:
             batch = final_conversations[i:i + pre_process_batch_size]
             futures.append(executor.submit(calculate_metrics, batch))
         
-        for future in tqdm(futures, desc=">Calculating conversation statistics", leave=False):
+        for future in tqdm(futures, desc=">Calculating conversation statistics", leave=False, smoothing = progress_bars_smoothing):
             tokens, words, convos = future.result()
             total_tokens += tokens
             total_words += words
