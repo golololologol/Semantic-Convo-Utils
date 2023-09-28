@@ -9,9 +9,9 @@ This script can deduplicate and filter datasets that are millions of conversatio
 1. Download the Semantic_dataset_filterer.py file from this repo.
 2. Open it in any text/code editor.
 3. Navigate to the middle of the script, there you will see all the settings available.
-4. Ensure that your dataset is in a compatible format (see Compatible formats), and input the whole path to your dataset into `file_path` variable.
-5. See other options there, and adjust them to your wants. Most notably: the `script_mode` and `device` variables.
-6. Launch it and see if you get any errors.
+4. Ensure that your dataset is in a compatible format (see Compatible formats), and input the whole path to your dataset into `file_path` variable (Do not remove the `r` before the string!).
+6. See other options there, and adjust them to your wants. Most notably: the `script_mode` and `device` variables.
+7. Launch it and see if you get any errors.
 ### Compatible formats:
 What's a script useful for, if the input format if unknown? Well, not for much, so here's what formats this script accepts:
 1. (Old) .jsonl, `{"conversations": ["AAAA","aaaaaaa","AAAAA"], "reversed": false, "source": "aaa_dataset", "score": 2}`\
