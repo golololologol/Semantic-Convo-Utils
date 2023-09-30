@@ -15,7 +15,7 @@ This script can deduplicate and filter datasets that are millions of conversatio
 ### Compatible formats:
 What's a script useful for, if the input format if unknown? Well, not for much, so here's what formats this script accepts:
 1. (Old) .jsonl, `{"conversations": ["AAAA","aaaaaaa","AAAAA"], "reversed": false, "source": "aaa_dataset", "score": 2}`\
-   `conversations`: List of turns in the conversation. If we visualize the turns, it'll look like: ["User: AAAA","AI: aaaaaaa","User: AAAAA"]
+   `conversations`: List of turns in the conversation. If we visualize the turns, it'll look like: ["User: AAAA","AI: aaaaaaa","User: AAAAA"]\
    `reversed`: Bool flag, that signifies if the first turn of the conversation is taken by the LLM.\
    `source`: String that denotes from what dataset the conversation came. You can leave it blank, and the script will fill it with the name of your input dataset.\
    `score`: If you have an external tool that scores every conversation as an integer between 1 and 10, you can populate this field with those scores. Otherwise just leave blank.
