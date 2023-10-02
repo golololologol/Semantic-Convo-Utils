@@ -10,114 +10,16 @@ import gc
 import re
 
 ### Functions
-def read_jsonl_lazy(file_path): # Generator to lazy read the dataset line-by-line
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            yield json.loads(line)
-
-def json_conversations_to_list(file_path): # Datasets in different versions are cross-loadable and will be saved in the chosen format
-    if dataset_version == 1: # Dataset version 1: populates the "conversations" variable with ["text"(conversations), "reversed", "source", "score"] for each line in the dataset
-        for item in read_jsonl_lazy(file_path):
-            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"])) # Each turn is discerned with "\n|`|\n"
-            tags = item.get("tags", [])
-            score = item.get("dataset_quality")
-            if not score:
-                score = item.get("score", 1)
-            if "reversed" in tags:
-                reversed = True
-            else:
-                reversed = False
-            yield {
-                "text": text,
-                "reversed": reversed,
-                "source": item.get("source", dataset_name),
-                "score": int(score)
-            }
-    else: # Dataset version 2: populates the "conversations" variable with ["sys"(system prompt/context), "text"(conversations), "source", "score", "synthetic", "factual", "tags"] for each line in the dataset
-        for item in read_jsonl_lazy(file_path):
-            text = "\n|`|\n".join(item.get("conversations", ["UH OH, NO CONVO"])) # Each turn is discerned with "\n|`|\n"
-            tags = item.get("tags", [])
-            quality = item.get("score")
-            if not quality:
-                quality = item.get("dataset_quality", 1)
-            if item.get("reversed", False):
-                tags.append("reversed")
-            yield {
-                "sys": item.get("init", ""),
-                "text": text,
-                "source": item.get("source", dataset_name),
-                "score": int(quality),
-                "synthetic": item.get("synthetic_origin", False),
-                "factual": item.get("likely_factual", False),
-                "tags": tags # All tags are just passed through to the final dataset, and do not make a difference in the uniqeness calculations
-            }
-
-def dataset_finalizer(conversations):
-    if dataset_version == 1:
-        conversations_to_save = [{
-                "conversations": conv["text"].split("\n|`|\n"),
-                "reversed": conv["reversed"],
-                "source": conv["source"],
-                "score": conv["score"]
-            } for conv in conversations ]
-    else:
-        conversations_to_save = [{
-                "init": conv["sys"],
-                "conversations": conv["text"].split("\n|`|\n"),
-                "source": conv["source"],
-                "dataset_quality": conv["score"],
-                "synthetic_origin": conv["synthetic"],
-                "likely_factual": conv["factual"],
-                "tags": conv["tags"]
-            } for conv in conversations ]
-        
-    return conversations_to_save # Output: The final dataset in the desired format
-
-def dataset_dumper(conversations): # Dumps the dataset to a corresponding file
-    if script_mode == 1:
-        file = dataset_path + "_Deduped_and_Filtered.jsonl"
-    elif script_mode == 2:
-        file = dataset_path + "_Deduped.jsonl"
-    elif script_mode == 3:
-        file = dataset_path + "_Filtered.jsonl"
-    with open(file, 'w', encoding='utf-8') as f:
-        for conversation in conversations:
-            f.write(json.dumps(conversation, ensure_ascii=False) + '\n')
-    print(">Saved!<")
-
-def json_conversations_to_list_to_embed(file_path):
-    for item in read_jsonl_lazy(file_path):
-        text = "\n".join(item["conversations"])
-        yield text # Output: All conversations as singular strings
-
-def calculate_metrics(conversations): # Input: List of conversations
-    total_tokens = 0
-    total_words = 0
-    total_convos = 0
-    
-    for conversation in tqdm(conversations, desc=f">Calculating conversation", leave=False, smoothing = progress_bars_smoothing):
-        text = " ".join(conversation["conversations"])
-        tokens = tokenizer(text)['input_ids']
-        words = text.split()
-        
-        total_tokens += len(tokens)
-        total_words += len(words)
-        total_convos += 1
-    
-    return total_tokens, total_words, total_convos # Output: Metrics of the given conversations
-
-def approximate_final_convo_amount(conversations_count):
-    remaining_factor = 1 - (X / 100) - (Y / 100) + (X * Y / 10000)
-    estimated_remaining_conversations = conversations_count * (remaining_factor ** n_iterations)
-    print(f">Estimate of remaining conversations after {n_iterations} iterations: ~{int(estimated_remaining_conversations)}<")
-
+## Bad settings handling fucntions
 def is_positive_int(value):
     return isinstance(value, int) and value > 0
 
 def is_valid_float(value, min_val=0, max_val=1):
     return (isinstance(value, float) or isinstance(value, int)) and min_val <= value <= max_val
 
-# Bad settings handling for every setting
+def is_valid_number(value):
+    return (value is int or float) or not (value >= 0)
+
 def validate_settings():
     validation_errors = [
         (script_mode not in valid_script_modes, f">Invalid script mode!<\nError was here: script_mode = {script_mode}"),
@@ -132,8 +34,8 @@ def validate_settings():
         (not is_positive_int(uniqueness_batch_size), f">Invalid uniqueness batch size!<\nError was here: uniqueness_batch_size = {uniqueness_batch_size}"),
         (not isinstance(P, int) or not (P >= 0), f">Invalid value for P!<\nError was here: P = {P}"),
         (not is_positive_int(match_threshold), f">Invalid match threshold!<\nError was here: match_threshold = {match_threshold}"),
-        (not (X is int or float) or not (X >= 0), f">Invalid value for X!<\nError was here: X = {X}"),
-        (not (Y is int or float) or not (Y >= 0), f">Invalid value for Y!<\nError was here: Y = {Y}"),
+        (not is_valid_number(X), f">Invalid value for X!<\nError was here: X = {X}"),
+        (not is_valid_number(X), f">Invalid value for Y!<\nError was here: Y = {Y}"),
         (not is_valid_float(alpha), f">Invalid alpha value!<\nError was here: alpha = {alpha}"),
         (not is_valid_float(beta), f">Invalid beta value!<\nError was here: beta = {beta}"),
         (not (quality_factor is int or float), f">Invalid quality factor!<\nError was here: quality_factor = {quality_factor}")
@@ -144,13 +46,73 @@ def validate_settings():
             print(error_message)
             exit()
 
-def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conversations, starting index in the original dataset, maximum token length, tokenizer, and text-cleaning pattern
+## Data loading functions
+def read_jsonl_lazy(file_path): # Generator to lazy read the dataset line-by-line
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            yield json.loads(line)
+
+def json_conversations_to_list_to_embed(file_path):# Generator to lazy read only the conversations
+    for item in read_jsonl_lazy(file_path):
+        text = "\n".join(item["conversations"])
+        yield text # Output: All conversations as singular strings
+
+def json_conversations_to_list(file_path):
+    for item in read_jsonl_lazy(file_path):
+        text = "\n|`|\n".join(item.get("conversations", ["NO CONVO! Please check if you inputted everything correctly, and that your dataset is in a compatible format!"]))  # Each turn is discerned with "\n|`|\n"
+        tags = item.get("tags", [])
+        source = item.get("source", dataset_name)
+        score = item.get("dataset_quality", item.get("score"))
+        if not score or score == '':
+            score = 1
+        
+        if dataset_version == 1:
+            reversed = ("reversed" in tags) or item.get("reversed")
+            yield {
+                "text": text,
+                "reversed": bool(reversed),
+                "source": source,
+                "score": int(score)
+            }
+        else:
+            if item.get("reversed"):
+                tags = list(set(tags + ["reversed"]))
+            yield {
+                "sys": item.get("init", ""),
+                "text": text,
+                "source": source,
+                "score": int(score),
+                "synthetic": item.get("synthetic_origin", False),
+                "factual": item.get("likely_factual", False),
+                "tags": tags
+            }
+
+## Embedding generation functions
+def load_embeddings(deduped_path, normal_path):
+    if os.path.exists(deduped_path) and os.path.exists(deduped_dataset_file) and use_deduped and script_mode != 2:
+        print(">Deduped embeddings file found. Loading...<")
+        return np.load(deduped_path), True
+    elif os.path.exists(normal_path):
+        print(">Embeddings file found. Loading...<")
+        return np.load(normal_path), False
+    return None, False
+
+def generate_dataset_embeddings(conversations):
+    chunks = [conversations[i:i + chunk_size] for i in range(0, len(conversations), chunk_size)]
+    chunks_count = len(chunks)
+    embeddings = []
+    for i, chunk in enumerate(chunks):
+        embeddings.extend(generate_embeddings(chunk, i, chunks_count))
+        chunks[i] = ""
+        gc.collect()
+    return embeddings
+
+def tokenize_batch(batch, start_idx):  # Input: List of conversations, starting index in the original dataset, maximum token length, tokenizer, and text-cleaning pattern
     embeddings_to_make_local = []
     for idx, convo in enumerate(batch):
         # Text Preprocessing: Removing unwanted characters using regex pattern and splitting conversation into chunks of words to stay under the tokenizer's max sequence length
-        cleaned_convo = pattern.sub('', convo)
-        cleaned_convo = ' '.join(cleaned_convo.split())
-        words = cleaned_convo.split(" ")
+        cleaned_convo = removing_pattern.sub('', convo)
+        words = cleaned_convo.split()
         word_chunks = [' '.join(words[i:i + (max_seq_len // 3)]) for i in range(0, len(words), (max_seq_len // 3))] # Split words into chunks of max_seq_len//3 words each
         word_chunks = [word_chunks[0]] + [f" {chunk}" for chunk in word_chunks[1:]]
         
@@ -163,7 +125,7 @@ def tokenize_batch(batch, start_idx, tokenizer, pattern):  # Input: List of conv
     
     return embeddings_to_make_local  # Output: List of dictionaries with tokenized text and original index of the conversation
 
-def generate_embeddings(conversations, iteration):  # Input: List of conversations, with all turns squashed into one line of text. Iteration: chunk of the dataset that is being processed. Max_length: tokenizer and model's sequence length
+def generate_embeddings(conversations, iteration, chunks_count):  # Input: List of conversations, with all turns of individual conversations squashed into one line of text. Iteration: chunk of the dataset that is being processed. Max_length: tokenizer and model's sequence length
     all_embeddings = []
     idx_to_embeddings = {}
     embeddings_to_make = []
@@ -173,12 +135,12 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
         futures = []
         for i in range(0, len(conversations), pre_process_batch_size):
             batch = conversations[i:i + pre_process_batch_size]
-            futures.append(executor.submit(tokenize_batch, batch, i, tokenizer, pattern))
-        for future in tqdm(futures, desc=f">Pre-processing text", leave=False, postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}", smoothing = progress_bars_smoothing):
+            futures.append(executor.submit(tokenize_batch, batch, i))
+        for future in tqdm(futures, desc=f">Pre-processing text", leave=False, postfix = f"Chunk {iteration + 1}/{chunks_count}", smoothing = progress_bars_smoothing):
             embeddings_to_make.extend(future.result())
 
     # Embedding Generation: Looping through tokenized batches to generate embeddings
-    for i in tqdm(range(0, len(embeddings_to_make), embeddings_batch_size), desc=f">Generating embeddings", postfix = f"Chunk {iteration + 1}/{chunks_to_embed_count}", smoothing = progress_bars_smoothing):
+    for i in tqdm(range(0, len(embeddings_to_make), embeddings_batch_size), desc=f">Generating embeddings", postfix = f"Chunk {iteration + 1}/{chunks_count}", smoothing = progress_bars_smoothing):
         batch_to_process = embeddings_to_make[i:i + embeddings_batch_size]
         tensor_list = []
         attention_mask_list = []
@@ -191,8 +153,7 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
             attention_mask_list.append([1] * min(len(tokens), max_seq_len))
 
             # Handling Overlength Tokens: If the amount of tokens exceed max_length, store them in idx_to_embeddings
-            if len(tokens) > max_seq_len:
-                if original_idx not in idx_to_embeddings:
+            if (len(tokens) > max_seq_len) and (original_idx not in idx_to_embeddings):
                     idx_to_embeddings[original_idx] = []
         
         # Tensor Padding: Padding the tensors and attention masks to be of equal length for batched operation
@@ -210,7 +171,7 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
 
         # Saving Embeddings: Store the generated embeddings
         for j, item in enumerate(batch_to_process):
-            original_idx = item['original_idx']
+            original_idx = item['original_idx'] 
             if len(item['tokens']) <= max_seq_len:
                 all_embeddings.append((original_idx, output[j]))
             else:
@@ -228,6 +189,49 @@ def generate_embeddings(conversations, iteration):  # Input: List of conversatio
     
     return final_embeddings  # Output: NumPy array of any-dimensional embeddings of conversations, in the order of their original conversations
 
+def save_embeddings(embeddings, path):
+    print(f">Total embeddings generated: {len(embeddings)}<\n>Saving embeddings to {path}...<")
+    np.save(path, np.array(embeddings))
+    gc.collect()
+
+## Conversation filtering and deduping functions
+def load_conversations(conversations):
+    if use_deduped_successful:
+        conversations = list(json_conversations_to_list(deduped_dataset_file))
+    elif not conversations or conversations == []:
+        conversations = list(json_conversations_to_list(dataset_file+".jsonl"))
+    return conversations
+
+# Conversation deduping functions
+def dedupe_conversations(conversations, embeddings):
+    conversation_groups = defaultdict(list)
+
+    for idx, conv in enumerate(conversations):
+        start_words = ' '.join(conv['text'].replace("\n|`|\n", " ").split()[:match_threshold])
+        conversation_groups[start_words].append({'index': idx})
+    conversations_to_save = []
+    for start_words, group in tqdm(conversation_groups.items(), desc=f">Processing conversations", leave=False, smoothing = progress_bars_smoothing):
+        if len(group) == 1:
+            conversations_to_save.append(group[0]['index'])
+            continue
+        group_embeddings = [embeddings[item['index']] for item in group]
+        group_uniqueness_values = compute_uniqueness(np.array(group_embeddings))
+        if P == 0:
+            n_indices_to_select = 1
+        else:
+            n_indices_to_select = len(group_uniqueness_values) // P
+        sorted_unique_indices = np.argsort(group_uniqueness_values)
+        most_unique_index = sorted_unique_indices[:n_indices_to_select]
+        
+        for i, item in enumerate(group):
+            if i in most_unique_index:
+                conversations_to_save.append(item['index'])
+    del conversation_groups
+    gc.collect()
+
+    return [conversations[i] for i in conversations_to_save], [embeddings[i] for i in conversations_to_save]
+
+# Conversation filtering functions
 def compute_batch_similarity(start, end, data_quality_all, normalized_embeddings, leave_one_out_aggregate_all, weights): # Child-function for multi-threaded processing of the compute_uniqueness function
     batch_similarities = np.zeros(end - start)
     leave_one_out_aggregate_all = leave_one_out_aggregate_all[start:end]
@@ -308,6 +312,101 @@ def filter_conversations(uniqueness_values, X, Y): # Input: Array of floats from
 
     return selected_indices # Output: List of indexes of conversations to save, represented as integers
 
+## Dataset saving functions
+def dataset_finalizer(conversations):
+    if dataset_version == 1:
+        conversations_to_save = [{
+                "conversations": conv["text"].split("\n|`|\n"),
+                "reversed": conv["reversed"],
+                "source": conv["source"],
+                "score": conv["score"]
+            } for conv in conversations ]
+    else:
+        conversations_to_save = [{
+                "init": conv["sys"],
+                "conversations": conv["text"].split("\n|`|\n"),
+                "source": conv["source"],
+                "dataset_quality": conv["score"],
+                "synthetic_origin": conv["synthetic"],
+                "likely_factual": conv["factual"],
+                "tags": conv["tags"]
+            } for conv in conversations ]
+        
+    return conversations_to_save # Output: The final dataset in the desired format
+
+def dataset_dumper(conversations, postfix_n):
+    suffix_map = {
+        1: "_Deduped_and_Filtered.jsonl",
+        2: "_Deduped.jsonl",
+        3: "_Filtered.jsonl",
+    }
+    if use_deduped_successful:
+        suffix = suffix_map.get(1)
+    else:
+        suffix = suffix_map.get(postfix_n)
+    file = dataset_file + suffix
+    
+    with open(file, 'w', encoding='utf-8') as f:
+        for conversation in conversations:
+            f.write(json.dumps(conversation, ensure_ascii=False) + '\n')
+    print(">Saved!<")
+
+## Misc
+def approximate_final_convo_amount(conversations_count):
+    remaining_factor = 1 - (X / 100) - (Y / 100) + (X * Y / 10000)
+    estimated_remaining_conversations = conversations_count * (remaining_factor ** n_iterations)
+    print(f">Estimate of remaining conversations after {n_iterations} iterations: ~{int(estimated_remaining_conversations)}<")
+
+def final_message(message_n):
+    if message_n == 1 or use_deduped_successful:
+        print(">Saving deduped and filtered conversations...<")
+    elif message_n == 2:
+        print(">Saving deduped conversations...<")
+    elif message_n == 3:
+        print(">Saving filtered conversations...<")
+
+def calculate_metrics(conversations): # Input: List of conversations
+    total_tokens = 0
+    total_words = 0
+    total_convos = 0
+    
+    for conversation in tqdm(conversations, desc=f">Calculating conversation", leave=False, smoothing = progress_bars_smoothing):
+        text = " ".join(conversation["conversations"])
+        tokens = tokenizer(text)['input_ids']
+        words = text.split()
+        
+        total_tokens += len(tokens)
+        total_words += len(words)
+        total_convos += 1
+    
+    return total_tokens, total_words, total_convos # Output: Metrics of the given conversations
+
+def calculate_and_print_final_stats(conversations):
+    total_tokens = 0
+    total_words = 0
+    total_convos = 0
+    with ThreadPoolExecutor(max_workers=num_threads) as executor:
+        futures = []
+        
+        for i in range(0, len(conversations), pre_process_batch_size):
+            batch = conversations[i:i + pre_process_batch_size]
+            futures.append(executor.submit(calculate_metrics, batch))
+        
+        for future in tqdm(futures, desc=">Calculating conversation statistics", leave=False, smoothing = progress_bars_smoothing):
+            tokens, words, convos = future.result()
+            total_tokens += tokens
+            total_words += words
+            total_convos += convos
+    
+    avg_tokens_per_convo = round(total_tokens / total_convos, 2) if total_convos > 0 else 0.00
+    avg_words_per_convo = round(total_words / total_convos, 2) if total_convos > 0 else 0.00
+    
+    print(f" Total tokens in the final dataset: {total_tokens}")
+    print(f"Total words in the final dataset: {total_words}")
+    print(f"Total conversations in the final dataset: {total_convos}")
+    print(f"Average tokens per conversation: {avg_tokens_per_convo}")
+    print(f"Average words per conversation: {avg_words_per_convo}")
+
 
 
 ### Main Logic
@@ -326,9 +425,9 @@ embeddings_batch_size = 100 # Batch size when making embeddings (will use a lot 
 uniqueness_batch_size = 1024 # Batch size when calculating uniqueness of conversations (128-2048 is good for most cases)
 
 # Configuration
-dataset_version = 2 # Save in what format? 1 - Old style datasets. 2 - New style datasets (with sys prompt, and tags)
+dataset_version = 1 # Save in which format? 1 - Old style dataset. 2 - New style dataset (with sys prompt, and tags)
 save_deduped = True # Save the deduped dataset and its embeddings?
-use_deduped = True # Use the already deduped dataset and embeddings instead of making them from scratch to save time?
+use_deduped = True # Use the already deduped dataset and embeddings to save time, instead of making them from scratch?
 early_approximation = True # Approximate the final number of convos, even before deduping?
 print_final_stats = True # Output the metrics of the final dataset?
 
@@ -337,8 +436,8 @@ P = 0 # Save 1/P most unique conversations in a group of near-duplicates (set P 
 match_threshold = 10 # Conversations that share match_threshold or more beginning words will be considered near-duplicates, and will be subject to deduplication
 
 # Filtering configuration
-n_iterations = 135 # Number of filtering iterations
-X = 3.5 # Will delete the bottom X% least unique conversations each iteration
+n_iterations = 40 # Number of filtering iterations
+X = 2 # Will delete the bottom X% least unique conversations each iteration
 Y = 0 # Will delete the top Y% most unique conversations each iteration
 alpha = 0.5 # Weight between basic and weighted similarities, 0.9 = (0.9 basic + 0.1 weighted) = cosine similarity
 beta = 0.4 # Weight between cosine similarity and euclidian distance, 0.8 = 0.8 cosine + 0.2 euclidean
@@ -358,16 +457,16 @@ if device == "cuda" and not torch.cuda.is_available():
 
 # Misc variables
 max_seq_len = 512 # Sequence length of the model and tokenizer, change it accordingly, if you're using some other embedding model
-progress_bars_smoothing = 0.06
+progress_bars_smoothing = 0.06 # Smaller = more gradual changes
 use_deduped_successful = False
 final_convo_amount_showed = False
 conversations = []
 dataset_name = os.path.splitext(os.path.basename(file_path))[0]
 dataset_directory = os.path.dirname(file_path)
-dataset_path = f"{dataset_directory}\{dataset_name}"
-embeddings_path = f"{dataset_path}_embeddings.npy"
-deduped_file = f"{dataset_path}_Deduped.jsonl"
-deduped_embeds_path = f"{dataset_path}_Deduped_embeddings.npy"
+dataset_file = f"{dataset_directory}\{dataset_name}"
+embeds_file = f"{dataset_file}_embeddings.npy"
+deduped_dataset_file = f"{dataset_file}_Deduped.jsonl"
+deduped_embeds_file = f"{dataset_file}_Deduped_embeddings.npy"
 
 # Initialize the hardware and model
 tokenizer = AutoTokenizer.from_pretrained(embed_model)
@@ -375,88 +474,39 @@ model = AutoModel.from_pretrained(embed_model)
 model.to(device)
 
 # Making embeds
-if os.path.exists(deduped_embeds_path) and os.path.exists(deduped_file) and use_deduped:
-    print(">Deduped embeddings file found. Loading...<")
-    embeddings = np.load(deduped_embeds_path)
-    use_deduped_successful = True
-elif os.path.exists(embeddings_path):
-    print(">Embeddings file found. Loading...<")
-    embeddings = np.load(embeddings_path)
-else:
-    print(f">Embeddings file of the dataset not found<\n>Making embeddings for {dataset_name}.jsonl...<")
-    conversations_to_embed = list(json_conversations_to_list_to_embed(file_path))
-    chunks_to_embed = [conversations_to_embed[i:i + chunk_size] for i in range(0, len(conversations_to_embed), chunk_size)]
-    chunks_to_embed_count = len(chunks_to_embed)
+embeddings, use_deduped_successful = load_embeddings(deduped_embeds_file, embeds_file)
 
+if embeddings is None:
+    print(f">Embeddings file of the dataset not found<\n>Making embeddings for {dataset_name}.jsonl...<")
+    embedding_conversations = list(json_conversations_to_list_to_embed(file_path))
+    removing_pattern = re.compile(r'\b(?:is|to|that|the|and|in|by|at|for|a|an)\b', re.IGNORECASE)
     if early_approximation:
-        approximate_final_convo_amount(len(conversations_to_embed))
+        approximate_final_convo_amount(len(embedding_conversations))
         final_convo_amount_showed = True
 
-    embeddings = []
-    pattern = re.compile(r'\b(?:is|to|that|the|and|in|by|at|for|a|an)\b', re.IGNORECASE) # Remove function words, as they contain almost no lexical meaning, and thus provide almost no semantic value to the conversation
-    
-    for i, chunk in enumerate(chunks_to_embed):
-        embeddings.extend(generate_embeddings(chunk, i))
-        chunks_to_embed[i] = ""
-        gc.collect()
-
-    print(f">Total embeddings generated: {len(embeddings)}<\n>Saving embeddings to {dataset_name}_embeddings.npy...<")
-    np.save(embeddings_path, np.array(embeddings))
+    embeddings = generate_dataset_embeddings(embedding_conversations)
+    save_embeddings(embeddings, embeds_file)
     gc.collect()
 
 # Commencing the dedupment
 if script_mode in [1, 2]:
-    if os.path.exists(deduped_file) and use_deduped and not script_mode == 2:
-        print(">Found deduped dataset, skipping deduping...<")
-        conversations = list(json_conversations_to_list(deduped_file))
-    else:
-        if not conversations:
-            conversations = list(json_conversations_to_list(file_path))
-        print(">Deduping in process...<")
-        conversation_groups = defaultdict(list)
+    conversations = load_conversations(conversations)
 
-        if early_approximation and not final_convo_amount_showed:
+    if use_deduped_successful:
+        print(">Found deduped dataset, skipping deduping...<")
+    else:
+        print(">Deduping in process...<")
+
+        if early_approximation and not final_convo_amount_showed and script_mode != 2:
             approximate_final_convo_amount(len(conversations))
             final_convo_amount_showed = True
 
-        for idx, conv in enumerate(conversations):
-            start_words = ' '.join(conv['text'].replace("\n|`|\n", " ").split()[:match_threshold])
-            conversation_groups[start_words].append({'index': idx})
-
-        conversations_to_save = []
-        for start_words, group in tqdm(conversation_groups.items(), desc=f">Processing conversations", leave=False, smoothing = progress_bars_smoothing):
-            if len(group) == 1:
-                conversations_to_save.append(group[0]['index'])
-                continue
-
-            group_embeddings = [embeddings[item['index']] for item in group]
-            group_uniqueness_values = compute_uniqueness(np.array(group_embeddings))
-            if P == 0:
-                n_indices_to_select = 1
-            else:
-                n_indices_to_select = len(group_uniqueness_values) // P
-            sorted_unique_indices = np.argsort(group_uniqueness_values)
-            most_unique_index = sorted_unique_indices[:n_indices_to_select]
-            
-            for i, item in enumerate(group):
-                if i in most_unique_index:
-                    conversations_to_save.append(item['index'])
-
-        del conversation_groups
-        gc.collect()
-        conversations = [conversations[i] for i in conversations_to_save]
-        embeddings = [embeddings[i] for i in conversations_to_save]
+        conversations, embeddings = dedupe_conversations(conversations, embeddings)
 
         if save_deduped and script_mode != 2:
             print(">Saving deduped dataset and embeddings...<")
-            np.save(deduped_embeds_path, np.array(embeddings))
-            deduped_conversations = dataset_finalizer(conversations)
-            
-            with open(f"{dataset_path}_Deduped.jsonl", 'w', encoding='utf-8') as f:
-                for conversation in deduped_conversations:
-                    f.write(json.dumps(conversation, ensure_ascii=False) + '\n')
-            del deduped_conversations
-            print(">Saved!<")
+            np.save(deduped_embeds_file, np.array(embeddings))
+            dataset_dumper(dataset_finalizer(conversations), 2)
 
         print(">Deduping done<")
         gc.collect()
@@ -464,11 +514,7 @@ if script_mode in [1, 2]:
 # Filtering conversations
 if script_mode in [1, 3]:
     print(">Filtering in process...<")
-    if os.path.exists(deduped_file) and use_deduped and not conversations:
-        conversations = list(json_conversations_to_list(deduped_file))
-    elif not conversations:
-        conversations = list(json_conversations_to_list(file_path))
-
+    conversations = load_conversations(conversations)
     approximate_final_convo_amount(len(conversations))
     uniqueness_values = compute_uniqueness(np.array(embeddings))
 
@@ -483,43 +529,12 @@ if script_mode in [1, 3]:
 
 # Save the final conversations (if there are any that need to be saved)
 if script_mode in [1, 2, 3]:
-    final_conversations = dataset_finalizer(conversations) # Converts conversations into the desired final format
+    final_conversations = dataset_finalizer(conversations)
+    final_message(script_mode)
+    dataset_dumper(final_conversations, script_mode)
 
-if script_mode == 1 or use_deduped_successful:
-    print(">Saving deduped and filtered conversations...<")
-    dataset_dumper(final_conversations)
-elif script_mode == 2:
-    print(">Saving deduped conversations...<")
-    dataset_dumper(final_conversations)
-elif script_mode == 3:
-    print(">Saving filtered conversations...<")
-    dataset_dumper(final_conversations)
-
-if print_final_stats and not script_mode == 4:
+if print_final_stats and script_mode in [1, 2, 3]:
     print(">Calculating statistics...<")
-    total_tokens = 0
-    total_words = 0
-    total_convos = 0
-    with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = []
-        
-        for i in range(0, len(final_conversations), pre_process_batch_size):
-            batch = final_conversations[i:i + pre_process_batch_size]
-            futures.append(executor.submit(calculate_metrics, batch))
-        
-        for future in tqdm(futures, desc=">Calculating conversation statistics", leave=False, smoothing = progress_bars_smoothing):
-            tokens, words, convos = future.result()
-            total_tokens += tokens
-            total_words += words
-            total_convos += convos
-    
-    avg_tokens_per_convo = total_tokens / total_convos if total_convos > 0 else 0
-    avg_words_per_convo = total_words / total_convos if total_convos > 0 else 0
-    
-    print(f" Total tokens in the final dataset: {total_tokens}")
-    print(f"Total words in the final dataset: {total_words}")
-    print(f"Total conversations in the final dataset: {total_convos}")
-    print(f"Average tokens per conversation: {avg_tokens_per_convo}")
-    print(f"Average words per conversation: {avg_words_per_convo}")
+    calculate_and_print_final_stats(final_conversations)
 
 print("Done!")
