@@ -457,16 +457,17 @@ if device == "cuda" and not torch.cuda.is_available():
 
 # Misc variables
 max_seq_len = 512 # Sequence length of the model and tokenizer, change it accordingly, if you're using some other embedding model
-progress_bars_smoothing = 0.06 # Smaller = more gradual changes
-use_deduped_successful = False
-final_convo_amount_showed = False
-conversations = []
+progress_bars_smoothing = 0.06 # Smaller = more gradual changes to progress bars
+
 dataset_name = os.path.splitext(os.path.basename(file_path))[0]
 dataset_directory = os.path.dirname(file_path)
 dataset_file = f"{dataset_directory}\{dataset_name}"
 embeds_file = f"{dataset_file}_embeddings.npy"
 deduped_dataset_file = f"{dataset_file}_Deduped.jsonl"
 deduped_embeds_file = f"{dataset_file}_Deduped_embeddings.npy"
+use_deduped_successful = False
+final_convo_amount_showed = False
+conversations = []
 
 # Initialize the hardware and model
 tokenizer = AutoTokenizer.from_pretrained(embed_model)
